@@ -1,0 +1,28 @@
+version: '2'
+services:
+  openvpn:
+    cap_add:
+     - NET_ADMIN
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: openvpn
+    environment:
+     - DEBUG=1
+    ports:
+     - "1194:1194/udp"
+    restart: always
+    volumes:
+     - ./openvpn-data/conf:/etc/openvpn
+     - ./openvpn-data/clients:/etc/openvpn/clients
+
+    depends_on: 
+      - web-test
+  web-test:
+    image: crccheck/hello-world
+    container_name: web-test    
+
+networks:
+  default:
+    name: a1vpn
+    external: true
