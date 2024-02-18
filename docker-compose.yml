@@ -3,24 +3,19 @@ services:
   openvpn:
     cap_add:
      - NET_ADMIN
-    build: 
-      context: .
-      dockerfile: Dockerfile
+    image: kylemanna/openvpn
+    build: .
     container_name: openvpn
     environment:
      - DEBUG=1
     ports:
      - "1194:1194/udp"
     restart: always
+    mem_limit: 128mb
     volumes:
      - ./openvpn-data/conf:/etc/openvpn
      - ./openvpn-data/clients:/etc/openvpn/clients
 
-    depends_on: 
-      - web-test
-  web-test:
-    image: crccheck/hello-world
-    container_name: web-test    
 
 networks:
   default:
