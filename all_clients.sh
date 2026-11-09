@@ -1,34 +1,70 @@
 #!/bin/bash
 
+declare -A latest_expiry
+declare -A latest_date
+declare -A valid_count
+
 CONTAINER_NAME="openvpn"
+now_epoch=$(date -u +%s)
 
-echo "Fetching client certificate list from container: $CONTAINER_NAME"
-echo "---------------------------------------------------------------"
-echo -e "STATUS\tEXPIRY DATE (UTC)\tCLIENT NAME"
-echo "---------------------------------------------------------------"
+while IFS='|' read -r cert_status expiry client
+do
+    formatted=$(printf "20%s-%s-%s %s:%s:%s UTC" \
+        "${expiry:0:2}" \
+        "${expiry:2:2}" \
+        "${expiry:4:2}" \
+        "${expiry:6:2}" \
+        "${expiry:8:2}" \
+        "${expiry:10:2}")
 
-docker exec -i "$CONTAINER_NAME" bash -c '
-  cd /etc/openvpn/pki || exit 1
-  if [ ! -f index.txt ]; then
-    echo "index.txt not found in /etc/openvpn/pki"
-    exit 1
-  fi
+    expiry_epoch=$(date -u -d "$formatted" +%s)
 
-  awk '"'"'{
-    status=$1
-    expiry=$2
-    client=$NF
-    sub("CN=","",client)
-    # Convert YYMMDDHHMMSSZ -> readable date
-    cmd = "date -u -d \"20" substr(expiry,1,2) "-" substr(expiry,3,2) "-" substr(expiry,5,2) " " substr(expiry,7,2) ":" substr(expiry,9,2) ":" substr(expiry,11,2) " UTC\""
-    cmd | getline formatted_date
-    close(cmd)
+    # Track latest certificate expiry for this client
+    if [[ -z "${latest_expiry[$client]}" || ${latest_expiry[$client]} -lt $expiry_epoch ]]; then
+        latest_expiry[$client]=$expiry_epoch
+        latest_date[$client]="$formatted"
+    fi
 
-    if (status=="V") status_text="VALID"
-    else if (status=="E") status_text="EXPIRED"
-    else if (status=="R") status_text="REVOKED"
-    else status_text=status
+    # Count only certificates that are both non-revoked and non-expired
+    if [[ "$cert_status" == "V" && "$expiry_epoch" -gt "$now_epoch" ]]; then
+        ((valid_count[$client]++))
+    fi
 
-    printf "%-8s\t%s\t%s\n", status_text, formatted_date, client
-  }'"'"' index.txt
-' | sort -k2
+done < <(
+    docker exec "$CONTAINER_NAME" awk '
+    {
+        client=$NF
+        sub("^/CN=","",client)
+        print $1 "|" $2 "|" client
+    }
+    ' /etc/openvpn/pki/index.txt
+)
+
+echo "Fetching client certificate summary from container: $CONTAINER_NAME"
+echo "------------------------------------------------------------------------------------------------"
+printf "%-10s %-23s %-11s %s\n" "STATUS" "LATEST EXPIRY (UTC)" "VALID CERTS" "CLIENT NAME"
+echo "------------------------------------------------------------------------------------------------"
+
+for client in "${!latest_expiry[@]}"
+do
+    valid=${valid_count[$client]:-0}
+    expiry_epoch=${latest_expiry[$client]}
+    expiry_date=${latest_date[$client]}
+
+    if (( valid > 1 )); then
+        status="MULTIPLE"
+    elif (( valid == 1 )); then
+        status="VALID"
+    elif (( expiry_epoch < now_epoch )); then
+        status="EXPIRED"
+    else
+        status="REVOKED"
+    fi
+
+    printf "%-10s %-23s %-11s %s\n" \
+        "$status" \
+        "$expiry_date" \
+        "$valid" \
+        "$client"
+
+done | sort -r -k4
